@@ -42,7 +42,7 @@ const defaultFailurePolicyRuleAction = jobset.RestartJobSet
 
 // executeFailurePolicy applies the Failure Policy of a JobSet when a failed child Job is found.
 // This function is run only when a failed child job has already been found.
-func executeFailurePolicy(ctx context.Context, js *jobset.JobSet, ownedJobs *childJobs, updateStatusOpts *statusUpdateOpts) error {
+func executeFailurePolicy(ctx context.Context, js *jobset.JobSet, failedJobs []*batchv1.Job, updateStatusOpts *statusUpdateOpts) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	// If no failure policy is defined, mark the JobSet as failed.
@@ -51,7 +51,7 @@ func executeFailurePolicy(ctx context.Context, js *jobset.JobSet, ownedJobs *chi
 		// for JobSets with many child jobs. This is why we don't unconditionally compute
 		// it once at the beginning of the function and share the results between the different
 		// possible code paths here.
-		firstFailedJob := findFirstFailedJob(ownedJobs.failed)
+		firstFailedJob := findFirstFailedJob(failedJobs)
 		msg := messageWithFirstFailedJob(constants.FailedJobsMessage, firstFailedJob.Name)
 		setJobSetFailedCondition(js, constants.FailedJobsReason, msg, updateStatusOpts)
 		return nil
@@ -59,12 +59,12 @@ func executeFailurePolicy(ctx context.Context, js *jobset.JobSet, ownedJobs *chi
 
 	// Check for matching Failure Policy Rule
 	rules := js.Spec.FailurePolicy.Rules
-	matchingFailurePolicyRule, matchingFailedJob := findFirstFailedPolicyRuleAndJob(ctx, rules, ownedJobs.failed)
+	matchingFailurePolicyRule, matchingFailedJob := findFirstFailedPolicyRuleAndJob(ctx, rules, failedJobs)
 
 	var failurePolicyRuleAction jobset.FailurePolicyAction
 	if matchingFailurePolicyRule == nil {
 		failurePolicyRuleAction = defaultFailurePolicyRuleAction
-		matchingFailedJob = findFirstFailedJob(ownedJobs.failed)
+		matchingFailedJob = findFirstFailedJob(failedJobs)
 	} else {
 		failurePolicyRuleAction = matchingFailurePolicyRule.Action
 	}

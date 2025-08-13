@@ -381,6 +381,15 @@ func (j *JobWrapper) Suspend(suspend bool) *JobWrapper {
 	return j
 }
 
+// Condition sets a single True condition in the job status.
+func (j *JobWrapper) Condition(conditionType batchv1.JobConditionType) *JobWrapper {
+	j.Status.Conditions = []batchv1.JobCondition{{
+		Type:   conditionType,
+		Status: corev1.ConditionTrue,
+	}}
+	return j
+}
+
 // PodAnnotations merges the given annotations to the existing Pod annotations.
 // Duplicate keys will be overwritten by the new annotations (given in the function
 // parameter).

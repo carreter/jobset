@@ -684,8 +684,24 @@ func schema_jobset_api_jobset_v1alpha2_ReplicatedJobStatus(ref common.ReferenceC
 							Format:      "int32",
 						},
 					},
+					"failureTarget": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FailureTarget is the number of child Jobs in a FailureTarget state (i.e. cleaning up after a failure).",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"successCriteriaMet": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SuccessCriteriaMet is the number of child Jobs in a SuccessCriteriaMet state (i.e. cleaning up after a success).",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
 				},
-				Required: []string{"name", "ready", "succeeded", "failed", "active", "suspended"},
+				Required: []string{"name", "ready", "succeeded", "failed", "active", "suspended", "failureTarget", "successCriteriaMet"},
 			},
 		},
 	}

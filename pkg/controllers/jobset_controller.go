@@ -61,13 +61,23 @@ type JobSetReconciler struct {
 type childJobs struct {
 	// Only jobs with jobset.sigs.k8s.io/restart-attempt == jobset.status.restarts are included
 	// in active, successful, and failed jobs. These jobs are part of the current JobSet run.
-	active     []*batchv1.Job
-	successful []*batchv1.Job
-	failed     []*batchv1.Job
+	active             []*batchv1.Job
+	successful         []*batchv1.Job
+	failed             []*batchv1.Job
+	failureTarget      []*batchv1.Job
+	successCriteriaMet []*batchv1.Job
 
 	// Jobs from a previous restart (marked for deletion) are mutually exclusive
 	// with the set of jobs in active, successful, and failed.
 	previous []*batchv1.Job
+}
+
+func (cj *childJobs) All() []*batchv1.Job {
+	return slices.Concat(cj.active, cj.successful, cj.failed, cj.failureTarget, cj.successCriteriaMet, cj.previous)
+}
+
+func (cj *childJobs) Current() []*batchv1.Job {
+	return slices.Concat(cj.active, cj.successful, cj.failed, cj.failureTarget, cj.successCriteriaMet)
 }
 
 // statusUpdateOpts tracks if a JobSet status update should be performed at the end of the reconciliation
@@ -155,7 +165,7 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 	}
 
 	// Calculate JobsReady and update statuses for each ReplicatedJob.
-	rjobStatuses := r.calculateReplicatedJobStatuses(ctx, js, ownedJobs)
+	rjobStatuses := r.calculateReplicatedJobStatuses(ctx, js, ownedJobs.Current())
 	updateReplicatedJobsStatuses(js, rjobStatuses, updateStatusOpts)
 
 	// If JobSet is already completed or failed, clean up active child jobs and requeue if TTLSecondsAfterFinished is set.
@@ -183,7 +193,7 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 
 	// If any jobs have failed, execute the JobSet failure policy (if any).
 	if len(ownedJobs.failed) > 0 {
-		if err := executeFailurePolicy(ctx, js, ownedJobs, updateStatusOpts); err != nil {
+		if err := executeFailurePolicy(ctx, js, ownedJobs.failed, updateStatusOpts); err != nil {
 			log.Error(err, "executing failure policy")
 			return ctrl.Result{}, err
 		}
@@ -270,8 +280,8 @@ func (r *JobSetReconciler) updateJobSetStatus(ctx context.Context, js *jobset.Jo
 	return nil
 }
 
-// getChildJobs gets jobs owned by the JobSet then categorizes them by status (active, successful, failed).
-// Another list (`delete`) is also added which tracks jobs marked for deletion.
+// getChildJobs gets jobs owned by the JobSet then categorizes them by status (active, successful, failed, failureTarget, successCriteriaMet).
+// Another list (previous) is also added which tracks jobs marked for deletion.
 func (r *JobSetReconciler) getChildJobs(ctx context.Context, js *jobset.JobSet) (*childJobs, error) {
 	log := ctrl.LoggerFrom(ctx)
 
@@ -281,7 +291,7 @@ func (r *JobSetReconciler) getChildJobs(ctx context.Context, js *jobset.JobSet) 
 		return nil, err
 	}
 
-	// Categorize each job into a bucket: active, successful, failed, or delete.
+	// Categorize each job into a bucket: active, successful, failed, failureTarget, successCriteriaMet, or delete ("previous").
 	ownedJobs := childJobs{}
 	for i, job := range childJobList.Items {
 		// Jobs with jobset.sigs.k8s.io/restart-attempt < restarts or
@@ -314,14 +324,17 @@ func (r *JobSetReconciler) getChildJobs(ctx context.Context, js *jobset.JobSet) 
 
 		// Jobs with jobset.sigs.k8s.io/restart-attempt == jobset.status.restarts are part of
 		// the current JobSet run, and marked either active, successful, or failed.
-		_, finishedType := JobFinished(&job)
-		switch finishedType {
-		case "": // active
-			ownedJobs.active = append(ownedJobs.active, &childJobList.Items[i])
+		switch JobCondition(&job) {
 		case batchv1.JobFailed:
 			ownedJobs.failed = append(ownedJobs.failed, &childJobList.Items[i])
 		case batchv1.JobComplete:
 			ownedJobs.successful = append(ownedJobs.successful, &childJobList.Items[i])
+		case batchv1.JobFailureTarget:
+			ownedJobs.failureTarget = append(ownedJobs.failureTarget, &childJobList.Items[i])
+		case batchv1.JobSuccessCriteriaMet:
+			ownedJobs.successCriteriaMet = append(ownedJobs.successCriteriaMet, &childJobList.Items[i])
+		default: // active or suspended
+			ownedJobs.active = append(ownedJobs.active, &childJobList.Items[i])
 		}
 	}
 	return &ownedJobs, nil
@@ -351,66 +364,64 @@ func updateReplicatedJobsStatuses(js *jobset.JobSet, statuses []jobset.Replicate
 
 // calculateReplicatedJobStatuses uses the JobSet's child jobs to update the statuses
 // of each of its replicatedJobs.
-func (r *JobSetReconciler) calculateReplicatedJobStatuses(ctx context.Context, js *jobset.JobSet, jobs *childJobs) []jobset.ReplicatedJobStatus {
+func (r *JobSetReconciler) calculateReplicatedJobStatuses(ctx context.Context, js *jobset.JobSet, currChildJobs []*batchv1.Job) []jobset.ReplicatedJobStatus {
 	log := ctrl.LoggerFrom(ctx)
 
-	// Prepare replicatedJobsReady for optimal iteration
-	replicatedJobsReady := map[string]map[string]int32{}
+	// Prepare rJobStatusMap for optimal iteration
+	rJobStatusMap := map[string]jobset.ReplicatedJobStatus{}
 	for _, replicatedJob := range js.Spec.ReplicatedJobs {
-		replicatedJobsReady[replicatedJob.Name] = map[string]int32{
-			"ready":     0,
-			"succeeded": 0,
-			"failed":    0,
-			"active":    0,
-			"suspended": 0,
-		}
+		rJobStatusMap[replicatedJob.Name] = jobset.ReplicatedJobStatus{Name: replicatedJob.Name}
 	}
 
-	// Calculate jobsReady for each Replicated Job
-	for _, job := range jobs.active {
+	for _, job := range currChildJobs {
 		if job.Labels == nil || job.Labels[jobset.ReplicatedJobNameKey] == "" {
 			log.Error(nil, fmt.Sprintf("job %s missing ReplicatedJobName label, can't update status", job.Name))
 			continue
 		}
-		ready := ptr.Deref(job.Status.Ready, 0)
-		// parallelism is always set as it is otherwise defaulted by k8s to 1
-		podsCount := *(job.Spec.Parallelism)
-		if job.Spec.Completions != nil && *job.Spec.Completions < podsCount {
-			podsCount = *job.Spec.Completions
+		rJobName := job.Labels[jobset.ReplicatedJobNameKey]
+		newRJobStatus, ok := rJobStatusMap[rJobName]
+		if !ok {
+			log.Error(fmt.Errorf("unrecognized replicated job"), "job", job, "replicatedJobName", rJobName)
+			continue
 		}
-		if job.Status.Succeeded+ready >= podsCount {
-			replicatedJobsReady[job.Labels[jobset.ReplicatedJobNameKey]]["ready"]++
+
+		switch JobCondition(job) {
+		case batchv1.JobFailed:
+			newRJobStatus.Failed++
+		case batchv1.JobComplete:
+			newRJobStatus.Succeeded++
+		case batchv1.JobFailureTarget:
+			newRJobStatus.FailureTarget++
+		case batchv1.JobSuccessCriteriaMet:
+			newRJobStatus.SuccessCriteriaMet++
+		case batchv1.JobSuspended:
+			newRJobStatus.Suspended++
+		default:
+			if jobReady(job) {
+				newRJobStatus.Ready++
+			} else {
+				newRJobStatus.Active++
+			}
 		}
-		if job.Status.Active > 0 {
-			replicatedJobsReady[job.Labels[jobset.ReplicatedJobNameKey]]["active"]++
-		}
-		if jobSuspended(job) {
-			replicatedJobsReady[job.Labels[jobset.ReplicatedJobNameKey]]["suspended"]++
-		}
+
+		rJobStatusMap[rJobName] = newRJobStatus
 	}
 
-	// Calculate succeededJobs
-	for _, job := range jobs.successful {
-		replicatedJobsReady[job.Labels[jobset.ReplicatedJobNameKey]]["succeeded"]++
+	// Flatten rJobStatusMap to a slice.
+	var rJobStatuses []jobset.ReplicatedJobStatus
+	for _, status := range rJobStatusMap {
+		rJobStatuses = append(rJobStatuses, status)
 	}
+	return rJobStatuses
+}
 
-	for _, job := range jobs.failed {
-		replicatedJobsReady[job.Labels[jobset.ReplicatedJobNameKey]]["failed"]++
+func jobReady(job *batchv1.Job) bool {
+	ready := ptr.Deref(job.Status.Ready, 0)
+	podsCount := ptr.Deref(job.Spec.Parallelism, 1) // parallelism defaulted by k8s to 1
+	if job.Spec.Completions != nil && *job.Spec.Completions < podsCount {
+		podsCount = *job.Spec.Completions
 	}
-
-	// Calculate ReplicatedJobsStatus
-	var rjStatus []jobset.ReplicatedJobStatus
-	for name, status := range replicatedJobsReady {
-		rjStatus = append(rjStatus, jobset.ReplicatedJobStatus{
-			Name:      name,
-			Ready:     status["ready"],
-			Succeeded: status["succeeded"],
-			Failed:    status["failed"],
-			Active:    status["active"],
-			Suspended: status["suspended"],
-		})
-	}
-	return rjStatus
+	return job.Status.Succeeded+ready >= podsCount
 }
 
 func (r *JobSetReconciler) suspendJobs(ctx context.Context, js *jobset.JobSet, activeJobs []*batchv1.Job, updateStatusOpts *statusUpdateOpts) error {
@@ -774,7 +785,7 @@ func shouldCreateJob(jobName string, ownedJobs *childJobs) bool {
 	// TODO: maybe we can use a job map here so we can do O(1) lookups
 	// to check if the job already exists, rather than a linear scan
 	// through all the jobs owned by the jobset.
-	for _, job := range slices.Concat(ownedJobs.active, ownedJobs.successful, ownedJobs.failed, ownedJobs.previous) {
+	for _, job := range ownedJobs.All() {
 		if jobName == job.Name {
 			return false
 		}
@@ -857,13 +868,13 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	obj.SetAnnotations(annotations)
 }
 
-func JobFinished(job *batchv1.Job) (bool, batchv1.JobConditionType) {
+func JobCondition(job *batchv1.Job) batchv1.JobConditionType {
 	for _, c := range job.Status.Conditions {
-		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
-			return true, c.Type
+		if c.Status == corev1.ConditionTrue {
+			return c.Type
 		}
 	}
-	return false, ""
+	return ""
 }
 
 func GetSubdomain(js *jobset.JobSet) string {

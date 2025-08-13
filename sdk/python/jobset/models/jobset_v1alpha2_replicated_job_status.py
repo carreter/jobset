@@ -28,11 +28,13 @@ class JobsetV1alpha2ReplicatedJobStatus(BaseModel):
     """ # noqa: E501
     active: StrictInt = Field(description="Active is the number of child Jobs with at least 1 pod in a running or pending state which are not marked for deletion.")
     failed: StrictInt = Field(description="Failed is the number of failed child Jobs.")
+    failure_target: StrictInt = Field(description="FailureTarget is the number of child Jobs in a FailureTarget state (i.e. cleaning up after a failure).", alias="failureTarget")
     name: StrictStr = Field(description="Name of the ReplicatedJob.")
     ready: StrictInt = Field(description="Ready is the number of child Jobs where the number of ready pods and completed pods is greater than or equal to the total expected pod count for the Job (i.e., the minimum of job.spec.parallelism and job.spec.completions).")
     succeeded: StrictInt = Field(description="Succeeded is the number of successfully completed child Jobs.")
+    success_criteria_met: StrictInt = Field(description="SuccessCriteriaMet is the number of child Jobs in a SuccessCriteriaMet state (i.e. cleaning up after a success).", alias="successCriteriaMet")
     suspended: StrictInt = Field(description="Suspended is the number of child Jobs which are in a suspended state.")
-    __properties: ClassVar[List[str]] = ["active", "failed", "name", "ready", "succeeded", "suspended"]
+    __properties: ClassVar[List[str]] = ["active", "failed", "failureTarget", "name", "ready", "succeeded", "successCriteriaMet", "suspended"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -87,9 +89,11 @@ class JobsetV1alpha2ReplicatedJobStatus(BaseModel):
         _obj = cls.model_validate({
             "active": obj.get("active") if obj.get("active") is not None else 0,
             "failed": obj.get("failed") if obj.get("failed") is not None else 0,
+            "failureTarget": obj.get("failureTarget") if obj.get("failureTarget") is not None else 0,
             "name": obj.get("name") if obj.get("name") is not None else '',
             "ready": obj.get("ready") if obj.get("ready") is not None else 0,
             "succeeded": obj.get("succeeded") if obj.get("succeeded") is not None else 0,
+            "successCriteriaMet": obj.get("successCriteriaMet") if obj.get("successCriteriaMet") is not None else 0,
             "suspended": obj.get("suspended") if obj.get("suspended") is not None else 0
         })
         return _obj

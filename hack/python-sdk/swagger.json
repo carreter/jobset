@@ -358,7 +358,9 @@
         "succeeded",
         "failed",
         "active",
-        "suspended"
+        "suspended",
+        "failureTarget",
+        "successCriteriaMet"
       ],
       "properties": {
         "active": {
@@ -369,6 +371,12 @@
         },
         "failed": {
           "description": "Failed is the number of failed child Jobs.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "failureTarget": {
+          "description": "FailureTarget is the number of child Jobs in a FailureTarget state (i.e. cleaning up after a failure).",
           "type": "integer",
           "format": "int32",
           "default": 0
@@ -386,6 +394,12 @@
         },
         "succeeded": {
           "description": "Succeeded is the number of successfully completed child Jobs.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "successCriteriaMet": {
+          "description": "SuccessCriteriaMet is the number of child Jobs in a SuccessCriteriaMet state (i.e. cleaning up after a success).",
           "type": "integer",
           "format": "int32",
           "default": 0

@@ -9192,6 +9192,11 @@ spec:
                       description: Failed is the number of failed child Jobs.
                       format: int32
                       type: integer
+                    failureTarget:
+                      description: FailureTarget is the number of child Jobs in a
+                        FailureTarget state (i.e. cleaning up after a failure).
+                      format: int32
+                      type: integer
                     name:
                       description: Name of the ReplicatedJob.
                       type: string
@@ -9207,6 +9212,11 @@ spec:
                         child Jobs.
                       format: int32
                       type: integer
+                    successCriteriaMet:
+                      description: SuccessCriteriaMet is the number of child Jobs
+                        in a SuccessCriteriaMet state (i.e. cleaning up after a success).
+                      format: int32
+                      type: integer
                     suspended:
                       description: Suspended is the number of child Jobs which are
                         in a suspended state.
@@ -9215,9 +9225,11 @@ spec:
                   required:
                   - active
                   - failed
+                  - failureTarget
                   - name
                   - ready
                   - succeeded
+                  - successCriteriaMet
                   - suspended
                   type: object
                 type: array

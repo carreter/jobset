@@ -140,9 +140,11 @@ class TestJobsetV1alpha2JobSetList(unittest.TestCase):
                                 jobset.models.jobset_v1alpha2_replicated_job_status.JobsetV1alpha2ReplicatedJobStatus(
                                     active = 56, 
                                     failed = 56, 
+                                    failure_target = 56, 
                                     name = '', 
                                     ready = 56, 
                                     succeeded = 56, 
+                                    success_criteria_met = 56, 
                                     suspended = 56, )
                                 ], 
                             restarts = 56, 
@@ -262,9 +264,11 @@ class TestJobsetV1alpha2JobSetList(unittest.TestCase):
                                 jobset.models.jobset_v1alpha2_replicated_job_status.JobsetV1alpha2ReplicatedJobStatus(
                                     active = 56, 
                                     failed = 56, 
+                                    failure_target = 56, 
                                     name = '', 
                                     ready = 56, 
                                     succeeded = 56, 
+                                    success_criteria_met = 56, 
                                     suspended = 56, )
                                 ], 
                             restarts = 56, 

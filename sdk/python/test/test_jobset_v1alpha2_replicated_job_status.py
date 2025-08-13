@@ -37,18 +37,22 @@ class TestJobsetV1alpha2ReplicatedJobStatus(unittest.TestCase):
             return JobsetV1alpha2ReplicatedJobStatus(
                 active = 56,
                 failed = 56,
+                failure_target = 56,
                 name = '',
                 ready = 56,
                 succeeded = 56,
+                success_criteria_met = 56,
                 suspended = 56
             )
         else:
             return JobsetV1alpha2ReplicatedJobStatus(
                 active = 56,
                 failed = 56,
+                failure_target = 56,
                 name = '',
                 ready = 56,
                 succeeded = 56,
+                success_criteria_met = 56,
                 suspended = 56,
         )
         """

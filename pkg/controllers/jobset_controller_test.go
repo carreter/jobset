@@ -44,11 +44,10 @@ import (
 	testutils "sigs.k8s.io/jobset/pkg/util/testing"
 )
 
-func TestIsJobFinished(t *testing.T) {
+func TestJobCondition(t *testing.T) {
 	tests := []struct {
 		name              string
 		conditions        []batchv1.JobCondition
-		finished          bool
 		wantConditionType batchv1.JobConditionType
 	}{
 		{
@@ -59,7 +58,6 @@ func TestIsJobFinished(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				},
 			},
-			finished:          true,
 			wantConditionType: batchv1.JobComplete,
 		},
 		{
@@ -70,18 +68,11 @@ func TestIsJobFinished(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				},
 			},
-			finished:          true,
 			wantConditionType: batchv1.JobFailed,
 		},
 		{
-			name: "active",
-			conditions: []batchv1.JobCondition{
-				{
-					Type:   "",
-					Status: corev1.ConditionTrue,
-				},
-			},
-			finished:          false,
+			name:              "active (i.e. no condition)",
+			conditions:        []batchv1.JobCondition{},
 			wantConditionType: "",
 		},
 		{
@@ -92,8 +83,7 @@ func TestIsJobFinished(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				},
 			},
-			finished:          false,
-			wantConditionType: "",
+			wantConditionType: batchv1.JobSuspended,
 		},
 		{
 			name: "failure target",
@@ -103,22 +93,42 @@ func TestIsJobFinished(t *testing.T) {
 					Status: corev1.ConditionTrue,
 				},
 			},
-			finished:          false,
-			wantConditionType: "",
+			wantConditionType: batchv1.JobFailureTarget,
+		},
+		{
+			name: "failure target",
+			conditions: []batchv1.JobCondition{
+				{
+					Type:   batchv1.JobFailureTarget,
+					Status: corev1.ConditionTrue,
+				},
+			},
+			wantConditionType: batchv1.JobFailureTarget,
+		},
+		{
+			name: "ignores conditions with false status",
+			conditions: []batchv1.JobCondition{
+				{
+					Type:   batchv1.JobFailureTarget,
+					Status: corev1.ConditionTrue,
+				},
+				{
+					Type:   batchv1.JobFailed,
+					Status: corev1.ConditionFalse,
+				},
+			},
+			wantConditionType: batchv1.JobFailureTarget,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			finished, conditionType := JobFinished(&batchv1.Job{
+			condition := JobCondition(&batchv1.Job{
 				Status: batchv1.JobStatus{
 					Conditions: tc.conditions,
 				},
 			})
-			if diff := cmp.Diff(tc.finished, finished); diff != "" {
-				t.Errorf("unexpected finished value (+got/-want): %s", diff)
-			}
-			if diff := cmp.Diff(tc.wantConditionType, conditionType); diff != "" {
+			if diff := cmp.Diff(tc.wantConditionType, condition); diff != "" {
 				t.Errorf("unexpected condition type (+got/-want): %s", diff)
 			}
 		})
@@ -1001,10 +1011,10 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 		ns         = "default"
 	)
 	tests := []struct {
-		name     string
-		js       *jobset.JobSet
-		jobs     childJobs
-		expected []jobset.ReplicatedJobStatus
+		name          string
+		js            *jobset.JobSet
+		currChildJobs []*batchv1.Job
+		expected      []jobset.ReplicatedJobStatus
 	}{
 		{
 			name: "partial jobs are ready, no succeeded jobs",
@@ -1017,79 +1027,76 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				active: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-1-test-job-0",
-						ns:                ns,
-						replicas:          1,
-						jobIdx:            0}).
-						Parallelism(1).
-						Completions(2).
-						Ready(1).
-						Succeeded(1).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0",
-						ns:                ns,
-						replicas:          3,
-						jobIdx:            0}).
-						Parallelism(5).
-						Ready(2).
-						Succeeded(3).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-1",
-						ns:                ns,
-						replicas:          3,
-						jobIdx:            0}).
-						Parallelism(3).
-						Completions(2).
-						Ready(1).
-						Succeeded(1).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-2",
-						ns:                ns,
-						replicas:          3,
-						jobIdx:            0}).
-						Parallelism(2).
-						Completions(3).
-						Ready(2).
-						Succeeded(1).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-3",
-						ns:                ns,
-						replicas:          3,
-						jobIdx:            0}).
-						Parallelism(4).
-						Completions(5).
-						Ready(2).
-						Succeeded(1).Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-1-test-job-0",
+					ns:                ns,
+					replicas:          1,
+					jobIdx:            0}).
+					Parallelism(1).
+					Completions(2).
+					Ready(1).
+					Succeeded(1).Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0",
+					ns:                ns,
+					replicas:          3,
+					jobIdx:            0}).
+					Parallelism(5).
+					Ready(2).
+					Succeeded(3).Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-1",
+					ns:                ns,
+					replicas:          3,
+					jobIdx:            0}).
+					Parallelism(3).
+					Completions(2).
+					Ready(1).
+					Succeeded(1).Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-2",
+					ns:                ns,
+					replicas:          3,
+					jobIdx:            0}).
+					Parallelism(2).
+					Completions(3).
+					Ready(2).
+					Succeeded(1).Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-3",
+					ns:                ns,
+					replicas:          3,
+					jobIdx:            0}).
+					Parallelism(4).
+					Completions(5).
+					Ready(2).
+					Succeeded(1).Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
-					Name:      "replicated-job-1",
-					Ready:     1,
-					Succeeded: 0,
+					Name:  "replicated-job-1",
+					Ready: 1,
 				},
 				{
-					Name:      "replicated-job-2",
-					Ready:     3,
-					Succeeded: 0,
+					Name:   "replicated-job-2",
+					Ready:  3,
+					Active: 1,
 				},
 			},
 		},
@@ -1106,14 +1113,10 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Obj()).Obj(),
 			expected: []jobset.ReplicatedJobStatus{
 				{
-					Name:      "replicated-job-1",
-					Ready:     0,
-					Succeeded: 0,
+					Name: "replicated-job-1",
 				},
 				{
-					Name:      "replicated-job-2",
-					Ready:     0,
-					Succeeded: 0,
+					Name: "replicated-job-2",
 				},
 			},
 		},
@@ -1128,31 +1131,26 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				active: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0",
-						ns:                ns,
-						replicas:          3,
-						jobIdx:            0}).
-						Parallelism(5).
-						Ready(2).
-						Succeeded(3).Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0",
+					ns:                ns,
+					replicas:          3,
+					jobIdx:            0}).
+					Parallelism(5).
+					Ready(2).
+					Succeeded(3).Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
-					Name:      "replicated-job-1",
-					Ready:     0,
-					Succeeded: 0,
+					Name: "replicated-job-1",
 				},
 				{
-					Name:      "replicated-job-2",
-					Ready:     1,
-					Succeeded: 0,
+					Name:  "replicated-job-2",
+					Ready: 1,
 				},
 			},
 		},
@@ -1167,35 +1165,35 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				successful: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-1-test-job-0"}).Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Condition(batchv1.JobComplete).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-1-test-job-0"}).
+					Condition(batchv1.JobComplete).
+					Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
 					Name:      "replicated-job-1",
-					Ready:     0,
 					Succeeded: 1,
 				},
 				{
 					Name:      "replicated-job-2",
-					Ready:     0,
 					Succeeded: 1,
 				},
 			},
 		},
 		{
-			name: "no ready jobs, only failed jobs",
+			name: "no ready jobs, only failed and failureTarget jobs",
 			js: testutils.MakeJobSet(jobSetName, ns).
 				ReplicatedJob(testutils.MakeReplicatedJob("replicated-job-1").
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
@@ -1205,35 +1203,42 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				failed: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-1-test-job-0"}).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-1-test-job-1"}).Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-1-test-job-2"}).Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Condition(batchv1.JobFailed).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-1-test-job-0"}).
+					Condition(batchv1.JobFailureTarget).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-1-test-job-1"}).
+					Condition(batchv1.JobFailed).
+					Obj(),
+
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-1-test-job-2"}).
+					Condition(batchv1.JobFailed).
+					Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
-					Name:   "replicated-job-1",
-					Ready:  0,
-					Failed: 3,
+					Name:          "replicated-job-1",
+					Failed:        2,
+					FailureTarget: 1,
 				},
 				{
 					Name:   "replicated-job-2",
@@ -1253,32 +1258,28 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				active: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).
-						Parallelism(5).
-						Active(1).
-						Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).
-						Parallelism(5).
-						Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-1"}).
-						Parallelism(1).
-						Active(1).
-						Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Parallelism(5).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Parallelism(5).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-1"}).
+					Parallelism(1).
+					Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
@@ -1289,7 +1290,7 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 				{
 					Name:   "replicated-job-2",
 					Ready:  0,
-					Active: 1,
+					Active: 2,
 				},
 			},
 		},
@@ -1304,42 +1305,41 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Job(testutils.MakeJobTemplate("test-job", ns).Obj()).
 					Replicas(3).
 					Obj()).Obj(),
-			jobs: childJobs{
-				active: []*batchv1.Job{
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-1",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).
-						Parallelism(5).
-						Suspend(true).
-						Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-0"}).
-						Parallelism(5).
-						Obj(),
-					makeJob(&makeJobArgs{
-						jobSetName:        jobSetName,
-						replicatedJobName: "replicated-job-2",
-						groupName:         "default",
-						jobName:           "test-jobset-replicated-job-2-test-job-1"}).
-						Parallelism(1).
-						Suspend(true).
-						Obj(),
-				},
+			currChildJobs: []*batchv1.Job{
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-1",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Parallelism(5).
+					Suspend(true).
+					Condition(batchv1.JobSuspended).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-0"}).
+					Parallelism(5).
+					Obj(),
+				makeJob(&makeJobArgs{
+					jobSetName:        jobSetName,
+					replicatedJobName: "replicated-job-2",
+					groupName:         "default",
+					jobName:           "test-jobset-replicated-job-2-test-job-1"}).
+					Parallelism(1).
+					Suspend(true).
+					Condition(batchv1.JobSuspended).
+					Obj(),
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
 					Name:      "replicated-job-1",
-					Ready:     0,
 					Suspended: 1,
 				},
 				{
 					Name:      "replicated-job-2",
-					Ready:     0,
+					Active:    1,
 					Suspended: 1,
 				},
 			},
@@ -1348,7 +1348,7 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := JobSetReconciler{Client: (fake.NewClientBuilder()).Build()}
-			statuses := r.calculateReplicatedJobStatuses(context.TODO(), tc.js, &tc.jobs)
+			statuses := r.calculateReplicatedJobStatuses(context.TODO(), tc.js, tc.currChildJobs)
 			less := func(a, b jobset.ReplicatedJobStatus) bool {
 				return a.Name < b.Name
 			}

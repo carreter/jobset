@@ -224,6 +224,12 @@ type ReplicatedJobStatus struct {
 
 	// Suspended is the number of child Jobs which are in a suspended state.
 	Suspended int32 `json:"suspended"`
+
+	// FailureTarget is the number of child Jobs in a FailureTarget state (i.e. cleaning up after a failure).
+	FailureTarget int32 `json:"failureTarget"`
+
+	// SuccessCriteriaMet is the number of child Jobs in a SuccessCriteriaMet state (i.e. cleaning up after a success).
+	SuccessCriteriaMet int32 `json:"successCriteriaMet"`
 }
 
 // +genclient

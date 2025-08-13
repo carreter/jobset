@@ -17,12 +17,14 @@ package v1alpha2
 // ReplicatedJobStatusApplyConfiguration represents a declarative configuration of the ReplicatedJobStatus type for use
 // with apply.
 type ReplicatedJobStatusApplyConfiguration struct {
-	Name      *string `json:"name,omitempty"`
-	Ready     *int32  `json:"ready,omitempty"`
-	Succeeded *int32  `json:"succeeded,omitempty"`
-	Failed    *int32  `json:"failed,omitempty"`
-	Active    *int32  `json:"active,omitempty"`
-	Suspended *int32  `json:"suspended,omitempty"`
+	Name               *string `json:"name,omitempty"`
+	Ready              *int32  `json:"ready,omitempty"`
+	Succeeded          *int32  `json:"succeeded,omitempty"`
+	Failed             *int32  `json:"failed,omitempty"`
+	Active             *int32  `json:"active,omitempty"`
+	Suspended          *int32  `json:"suspended,omitempty"`
+	FailureTarget      *int32  `json:"failureTarget,omitempty"`
+	SuccessCriteriaMet *int32  `json:"successCriteriaMet,omitempty"`
 }
 
 // ReplicatedJobStatusApplyConfiguration constructs a declarative configuration of the ReplicatedJobStatus type for use with
@@ -76,5 +78,21 @@ func (b *ReplicatedJobStatusApplyConfiguration) WithActive(value int32) *Replica
 // If called multiple times, the Suspended field is set to the value of the last call.
 func (b *ReplicatedJobStatusApplyConfiguration) WithSuspended(value int32) *ReplicatedJobStatusApplyConfiguration {
 	b.Suspended = &value
+	return b
+}
+
+// WithFailureTarget sets the FailureTarget field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the FailureTarget field is set to the value of the last call.
+func (b *ReplicatedJobStatusApplyConfiguration) WithFailureTarget(value int32) *ReplicatedJobStatusApplyConfiguration {
+	b.FailureTarget = &value
+	return b
+}
+
+// WithSuccessCriteriaMet sets the SuccessCriteriaMet field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the SuccessCriteriaMet field is set to the value of the last call.
+func (b *ReplicatedJobStatusApplyConfiguration) WithSuccessCriteriaMet(value int32) *ReplicatedJobStatusApplyConfiguration {
+	b.SuccessCriteriaMet = &value
 	return b
 }

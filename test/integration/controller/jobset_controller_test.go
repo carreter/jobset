@@ -29,7 +29,6 @@ import (
 	"github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -1350,14 +1349,19 @@ var _ = ginkgo.Describe("JobSet controller", func() {
 				},
 				{
 					checkJobSetState: func(js *jobset.JobSet) {
-						gomega.Eventually(func() bool {
-							gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: js.Name, Namespace: js.Namespace}, js)).To(gomega.Succeed())
-							return checkJobSetReplicatedJobsStatus(js)
-						}, timeout, interval).Should(gomega.Equal(true))
+						matchJobSetReplicatedStatus(js, []jobset.ReplicatedJobStatus{
+							{
+								Name:      "replicated-job-b",
+								Succeeded: 3,
+							},
+							{
+								Name:      "replicated-job-a",
+								Succeeded: 1,
+							},
+						})
 					},
 				},
-			},
-		}),
+			}}),
 		ginkgo.Entry("jobset replicatedJobsStatuses should create and update", &testCase{
 			makeJobSet: func(ns *corev1.Namespace) *testing.JobSetWrapper {
 				return testJobSet(ns).Suspend(false)
@@ -1374,10 +1378,18 @@ var _ = ginkgo.Describe("JobSet controller", func() {
 				},
 				{
 					checkJobSetState: func(js *jobset.JobSet) {
-						gomega.Eventually(func() bool {
-							gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: js.Name, Namespace: js.Namespace}, js)).To(gomega.Succeed())
-							return checkJobSetReplicatedJobsStatus(js)
-						}, timeout, interval).Should(gomega.Equal(true))
+						matchJobSetReplicatedStatus(js, []jobset.ReplicatedJobStatus{
+							{
+								Name:   "replicated-job-b",
+								Ready:  3,
+								Active: 3,
+							},
+							{
+								Name:   "replicated-job-a",
+								Ready:  1,
+								Active: 1,
+							},
+						})
 					},
 				},
 			},
@@ -2591,57 +2603,6 @@ func makeAllJobsReady(jl *batchv1.JobList) {
 		job.Status.Ready = job.Spec.Parallelism
 		gomega.Eventually(k8sClient.Status().Update(ctx, &job), timeout, interval).Should(gomega.Succeed())
 	}
-}
-
-func checkJobSetReplicatedJobsStatus(js *jobset.JobSet) bool {
-	var jobList batchv1.JobList
-	gomega.Eventually(k8sClient.List(ctx, &jobList, client.InNamespace(js.Namespace))).Should(gomega.Succeed())
-	jobsStatuses := map[string]map[string]int32{}
-	for _, job := range jobList.Items {
-		jobsStatuses[job.Labels[jobset.ReplicatedJobNameKey]] = map[string]int32{
-			"ready":     0,
-			"succeeded": 0,
-			"failed":    0,
-			"suspended": 0,
-		}
-	}
-	for _, job := range jobList.Items {
-		ready := ptr.Deref(job.Status.Ready, 0)
-		// parallelism is always set as it is otherwise defaulted by k8s to 1
-		podsCount := *(job.Spec.Parallelism)
-		if job.Spec.Completions != nil && *job.Spec.Completions < podsCount {
-			podsCount = *job.Spec.Completions
-		}
-
-		if isFinished, conditionType := controllers.JobFinished(&job); isFinished && conditionType == batchv1.JobComplete {
-			jobsStatuses[job.Labels[jobset.ReplicatedJobNameKey]]["succeeded"]++
-			continue
-		}
-
-		if isFinished, conditionType := controllers.JobFinished(&job); isFinished && conditionType == batchv1.JobFailed {
-			jobsStatuses[job.Labels[jobset.ReplicatedJobNameKey]]["failed"]++
-			continue
-		}
-
-		if job.Status.Succeeded+ready >= podsCount {
-			if job.Labels != nil && job.Labels[jobset.ReplicatedJobNameKey] != "" {
-				jobsStatuses[job.Labels[jobset.ReplicatedJobNameKey]]["ready"]++
-			}
-		}
-		if job.Spec.Suspend != nil && *job.Spec.Suspend {
-			jobsStatuses[job.Labels[jobset.ReplicatedJobNameKey]]["suspended"]++
-		}
-	}
-	replicatedJobsStatuses := map[string]map[string]int32{}
-	for _, replicatedJobStatus := range js.Status.ReplicatedJobsStatus {
-		replicatedJobsStatuses[replicatedJobStatus.Name] = map[string]int32{
-			"ready":     replicatedJobStatus.Ready,
-			"succeeded": replicatedJobStatus.Succeeded,
-			"failed":    replicatedJobStatus.Failed,
-			"suspended": replicatedJobStatus.Suspended,
-		}
-	}
-	return apiequality.Semantic.DeepEqual(jobsStatuses, replicatedJobsStatuses)
 }
 
 func numExpectedServices(js *jobset.JobSet) int {
