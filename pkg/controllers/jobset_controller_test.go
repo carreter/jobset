@@ -119,11 +119,27 @@ func TestJobCondition(t *testing.T) {
 			},
 			wantConditionType: batchv1.JobFailureTarget,
 		},
+		{
+			name: "returns most recent true status",
+			conditions: []batchv1.JobCondition{
+				{
+					Type:               batchv1.JobFailureTarget,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.NewTime(time.UnixMicro(1)),
+				},
+				{
+					Type:               batchv1.JobFailed,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.NewTime(time.UnixMicro(2)),
+				},
+			},
+			wantConditionType: batchv1.JobFailed,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			condition := JobCondition(&batchv1.Job{
+			condition := LatestJobCondition(&batchv1.Job{
 				Status: batchv1.JobStatus{
 					Conditions: tc.conditions,
 				},
@@ -1090,13 +1106,14 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 			},
 			expected: []jobset.ReplicatedJobStatus{
 				{
-					Name:  "replicated-job-1",
-					Ready: 1,
+					Name:   "replicated-job-1",
+					Ready:  1,
+					Active: 1,
 				},
 				{
 					Name:   "replicated-job-2",
 					Ready:  3,
-					Active: 1,
+					Active: 4,
 				},
 			},
 		},
@@ -1149,8 +1166,9 @@ func TestCalculateReplicatedJobStatuses(t *testing.T) {
 					Name: "replicated-job-1",
 				},
 				{
-					Name:  "replicated-job-2",
-					Ready: 1,
+					Name:   "replicated-job-2",
+					Ready:  1,
+					Active: 1,
 				},
 			},
 		},

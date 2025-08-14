@@ -324,7 +324,7 @@ func (r *JobSetReconciler) getChildJobs(ctx context.Context, js *jobset.JobSet) 
 
 		// Jobs with jobset.sigs.k8s.io/restart-attempt == jobset.status.restarts are part of
 		// the current JobSet run, and marked either active, successful, or failed.
-		switch JobCondition(&job) {
+		switch LatestJobCondition(&job) {
 		case batchv1.JobFailed:
 			ownedJobs.failed = append(ownedJobs.failed, &childJobList.Items[i])
 		case batchv1.JobComplete:
@@ -385,7 +385,7 @@ func (r *JobSetReconciler) calculateReplicatedJobStatuses(ctx context.Context, j
 			continue
 		}
 
-		switch JobCondition(job) {
+		switch LatestJobCondition(job) {
 		case batchv1.JobFailed:
 			newRJobStatus.Failed++
 		case batchv1.JobComplete:
@@ -399,9 +399,8 @@ func (r *JobSetReconciler) calculateReplicatedJobStatuses(ctx context.Context, j
 		default:
 			if jobReady(job) {
 				newRJobStatus.Ready++
-			} else {
-				newRJobStatus.Active++
 			}
+			newRJobStatus.Active++
 		}
 
 		rJobStatusMap[rJobName] = newRJobStatus
@@ -868,8 +867,19 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	obj.SetAnnotations(annotations)
 }
 
-func JobCondition(job *batchv1.Job) batchv1.JobConditionType {
-	for _, c := range job.Status.Conditions {
+func LatestJobCondition(job *batchv1.Job) batchv1.JobConditionType {
+	conditions := job.Status.Conditions
+	slices.SortFunc(conditions, func(a, b batchv1.JobCondition) int {
+		if a.LastTransitionTime.Before(&b.LastTransitionTime) {
+			return 1
+		}
+		if b.LastTransitionTime.Before(&a.LastTransitionTime) {
+			return -1
+		}
+		return 0
+	})
+
+	for _, c := range conditions {
 		if c.Status == corev1.ConditionTrue {
 			return c.Type
 		}

@@ -2624,17 +2624,8 @@ func completeAllJobs(jobList *batchv1.JobList) {
 func completeJob(job *batchv1.Job) {
 	now := metav1.Now()
 	status := batchv1.JobStatus{
-		StartTime: job.Status.StartTime,
-		Conditions: append(job.Status.Conditions, []batchv1.JobCondition{
-			{
-				Type:   batchv1.JobSuccessCriteriaMet,
-				Status: corev1.ConditionTrue,
-			},
-			{
-				Type:   batchv1.JobComplete,
-				Status: corev1.ConditionTrue,
-			},
-		}...),
+		StartTime:      job.Status.StartTime,
+		Conditions:     job.Status.Conditions,
 		Succeeded:      ptr.Deref(job.Spec.Parallelism, 0),
 		CompletionTime: job.Status.CompletionTime,
 	}
@@ -2646,6 +2637,19 @@ func completeJob(job *batchv1.Job) {
 	if status.CompletionTime == nil {
 		status.CompletionTime = &now
 	}
+
+	status.Conditions = append(status.Conditions, []batchv1.JobCondition{
+		{
+			Type:               batchv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: *status.CompletionTime,
+		},
+		{
+			Type:               batchv1.JobSuccessCriteriaMet,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.NewTime((*status.CompletionTime).Add(-time.Second)),
+		},
+	}...)
 	updateJobStatus(job, status)
 }
 
@@ -2726,24 +2730,28 @@ func failJobWithOptions(job *batchv1.Job, failJobOpts *failJobOptions) {
 		failJobOpts = &failJobOptions{}
 	}
 	status := batchv1.JobStatus{
-		StartTime: job.Status.StartTime,
-		Conditions: append(job.Status.Conditions, []batchv1.JobCondition{
-			{
-				Type:   batchv1.JobFailureTarget,
-				Status: corev1.ConditionTrue,
-			},
-			{
-				Type:   batchv1.JobFailed,
-				Status: corev1.ConditionTrue,
-				Reason: ptr.Deref(failJobOpts.reason, ""),
-			},
-		}...),
+		StartTime:  job.Status.StartTime,
+		Conditions: job.Status.Conditions,
 	}
 	// Emulate kube-controller-manager job-controller
 	// since finished Job has constraints for non-empty startTime.
 	if status.StartTime == nil {
 		status.StartTime = ptr.To(metav1.Now())
 	}
+
+	status.Conditions = append(status.Conditions, []batchv1.JobCondition{
+		{
+			Type:               batchv1.JobFailed,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.NewTime(status.StartTime.Add(time.Second)),
+		},
+		{
+			Type:               batchv1.JobFailed,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.NewTime(status.StartTime.Add(time.Minute)),
+		},
+	}...)
+
 	updateJobStatus(job, status)
 }
 
